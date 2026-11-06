@@ -6,7 +6,10 @@ plugins {
 // Release signing comes from environment variables (set from GitHub secrets in CI,
 // or locally if you export them). Without them the build falls back to the debug key,
 // which installs fine but will NOT update over a properly signed install.
-val signingStoreFile: String? = System.getenv("LOMOCAM_KEYSTORE_FILE")
+// Values pasted into GitHub secrets can pick up stray spaces/newlines, so trim them.
+fun signingEnv(name: String): String? = System.getenv(name)?.trim()?.takeIf { it.isNotEmpty() }
+
+val signingStoreFile: String? = signingEnv("LOMOCAM_KEYSTORE_FILE")
 val hasReleaseSigning = !signingStoreFile.isNullOrBlank() && file(signingStoreFile).exists()
 
 // Every CI run gets a higher versionCode so Android always accepts it as an update.
@@ -29,9 +32,9 @@ android {
         create("release") {
             if (hasReleaseSigning) {
                 storeFile = file(signingStoreFile!!)
-                storePassword = System.getenv("LOMOCAM_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("LOMOCAM_KEY_ALIAS")
-                keyPassword = System.getenv("LOMOCAM_KEY_PASSWORD")
+                storePassword = signingEnv("LOMOCAM_KEYSTORE_PASSWORD")
+                keyAlias = signingEnv("LOMOCAM_KEY_ALIAS")
+                keyPassword = signingEnv("LOMOCAM_KEY_PASSWORD")
             }
         }
     }

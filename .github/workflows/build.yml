@@ -78,3 +78,43 @@ jobs:
               --title "LomoCam build ${GITHUB_RUN_NUMBER} (${GITHUB_REF_NAME})" \
               --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Open this page on the Pixel and tap the .apk to install."
           fi
+
+  # Opens the freshly built APK on an Android emulator to catch "app won't open" problems
+  # before they reach the Pixel. Runs after the APK is published so a failure here never
+  # blocks getting a build onto the phone.
+  launch-test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: LomoCam-${{ github.run_number }}
+          path: out
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Launch on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_9_pro
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: bash .github/scripts/launch-test.sh
+
+      - name: Upload launch-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: launch-test-${{ github.run_number }}
+          path: launch-test/
+          if-no-files-found: ignore

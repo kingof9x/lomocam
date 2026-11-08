@@ -15,3 +15,12 @@ class BuildInfoTest {
         assertEquals("v?", BuildInfo.formatVersion(""))
     }
 }
+
+class CrashReportTest {
+    @Test
+    fun includesVersionThreadAndCause() {
+        val report = CrashReport.format("v0.1.9", "main", IllegalStateException("boom"))
+        org.junit.Assert.assertTrue(report.startsWith("LomoCam v0.1.9 crashed on thread \"main\""))
+        org.junit.Assert.assertTrue(report.contains("IllegalStateException: boom"))
+    }
+}

@@ -67,8 +67,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "build-${GITHUB_RUN_NUMBER}" out/*.apk \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "LomoCam build ${GITHUB_RUN_NUMBER} (${GITHUB_REF_NAME})" \
-            --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Open this page on the Pixel and tap the .apk to install."
+          tag="build-${GITHUB_RUN_NUMBER}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # Re-run of the same build: replace the APK on the existing release.
+            gh release upload "$tag" out/*.apk --clobber
+          else
+            gh release create "$tag" out/*.apk \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "LomoCam build ${GITHUB_RUN_NUMBER} (${GITHUB_REF_NAME})" \
+              --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Open this page on the Pixel and tap the .apk to install."
+          fi

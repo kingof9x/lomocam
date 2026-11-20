@@ -1,9 +1,20 @@
-name: Build APK
+name: Build and release
 
+# Builds the APK on every push to main and on pull requests (PR builds appear as download links on the PR).
+# To publish a release: Actions > Build and release > Run workflow. The version box says "next"
+# (last release + 1); type a number to choose one, or clear it to only test the build.
+# The release page gives a plain APK link you can open straight from the Pixel.
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version. "next" = last release + 1 (for example 1.3 after 1.2), or type one (for example 2.0). Empty = only test the build, no release.'
+        required: false
+        default: 'next'
 
 concurrency:
   group: build-${{ github.ref }}
@@ -13,7 +24,45 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    # Works out the release version: from the Run workflow box ("next" = last release + 1)
+    # or from a pushed v* tag. Empty means "only test the build, no release".
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          v=""
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            v=$(printf '%s' "$GITHUB_REF_NAME" | grep -oE '[0-9]+(\.[0-9]+)*$' || true)
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -n "$INPUT" ]; then
+            if [ "$INPUT" = next ]; then
+              last=$(gh api "repos/$REPO/releases?per_page=100" --jq '[.[] | select(.draft == false and .prerelease == false) | .tag_name][0] // ""')
+              num=$(printf '%s' "$last" | grep -oE '[0-9]+(\.[0-9]+)*$' || true)
+              if [ -z "$num" ]; then
+                echo "::error::There is no release yet, so there is nothing to add 1 to. Run again and type the first version (for example 1.0)."; exit 1
+              fi
+              v=$(printf '%s' "$num" | awk -F. -v OFS=. '{$NF=$NF+1; print}')
+              echo "Last release: ${last:-none}"
+            else
+              v="${INPUT#[vV]}"
+            fi
+          fi
+          if [ -n "$v" ] && ! printf '%s' "$v" | grep -qE '^[0-9]+(\.[0-9]+)*$'; then
+            echo "::error::'$v' is not a version number. Use numbers like 1.4 or 2.0.1, or 'next'."; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=${v:+v$v}" >> "$GITHUB_OUTPUT"
+          if [ -n "$v" ]; then echo "### Releasing v$v" >> "$GITHUB_STEP_SUMMARY"; else echo "### Test build only, no release" >> "$GITHUB_STEP_SUMMARY"; fi
+
   build:
+    needs: version
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -43,15 +92,19 @@ jobs:
 
       - name: Build release APK
         env:
+          LOMOCAM_VERSION_NAME: ${{ needs.version.outputs.version }}
           LOMOCAM_KEYSTORE_PASSWORD: ${{ secrets.LOMOCAM_KEYSTORE_PASSWORD }}
           LOMOCAM_KEY_ALIAS: ${{ secrets.LOMOCAM_KEY_ALIAS }}
           LOMOCAM_KEY_PASSWORD: ${{ secrets.LOMOCAM_KEY_PASSWORD }}
         run: ./gradlew --no-daemon assembleRelease
 
       - name: Rename APK
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/release/*.apk "out/LomoCam-${GITHUB_RUN_NUMBER}.apk"
+          name="${VERSION:-$GITHUB_RUN_NUMBER}"
+          cp app/build/outputs/apk/release/*.apk "out/LomoCam-${name}.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -62,19 +115,34 @@ jobs:
 
       # A GitHub Release gives a plain APK link you can open straight from the Pixel
       # (artifacts above are zipped and need a desktop browser).
-      - name: Publish phone download
-        if: github.event_name != 'pull_request'
+      - name: Publish the release
+        if: needs.version.outputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          tag="build-${GITHUB_RUN_NUMBER}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            # Re-run of the same build: replace the APK on the existing release.
-            gh release upload "$tag" out/*.apk --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/*.apk --clobber
           else
-            gh release create "$tag" out/*.apk \
-              --prerelease \
+            gh release create "$TAG" out/*.apk \
               --target "$GITHUB_SHA" \
-              --title "LomoCam build ${GITHUB_RUN_NUMBER} (${GITHUB_REF_NAME})" \
-              --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Open this page on the Pixel and tap the .apk to install."
+              --title "LomoCam $VERSION" \
+              --notes "Open this page on the Pixel and tap the .apk to install." \
+              --generate-notes
           fi
+
+  build-passed:
+    # One check that sums up the whole build. The repo's "Require passing build" rule
+    # waits for this before the PR can be merged.
+    name: Build passed
+    if: always()
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that every build job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null

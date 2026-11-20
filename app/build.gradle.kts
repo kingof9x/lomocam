@@ -25,7 +25,8 @@ android {
         minSdk = 36
         targetSdk = 37
         versionCode = ciRunNumber
-        versionName = "0.1.$ciRunNumber"
+        // A release build (Build and release > Run workflow) passes its version in LOMOCAM_VERSION_NAME.
+        versionName = System.getenv("LOMOCAM_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "0.1.$ciRunNumber"
     }
 
     signingConfigs {

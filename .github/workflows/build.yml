@@ -131,3 +131,18 @@ jobs:
               --notes "Open this page on the Pixel and tap the .apk to install." \
               --generate-notes
           fi
+
+  build-passed:
+    # One check that sums up the whole build. The repo's "Require passing build" rule
+    # waits for this before the PR can be merged.
+    name: Build passed
+    if: always()
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that every build job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
